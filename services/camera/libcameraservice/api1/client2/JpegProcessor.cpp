@@ -204,24 +204,28 @@ status_t JpegProcessor::processNewCapture() {
     ATRACE_CALL();
     status_t res;
     sp<Camera2Heap> captureHeap;
+    sp<MemoryBase> captureBuffer;
 
     CpuConsumer::LockedBuffer imgBuffer;
 
-    res = mCaptureConsumer->lockNextBuffer(&imgBuffer);
-    if (res != OK) {
-        if (res != BAD_VALUE) {
-            ALOGE("%s: Camera %d: Error receiving still image buffer: "
-                    "%s (%d)", __FUNCTION__,
-                    mId, strerror(-res), res);
+    {
+        Mutex::Autolock l(mInputMutex);
+        if (mCaptureStreamId == NO_STREAM) {
+            ALOGW("%s: Camera %d: No stream is available", __FUNCTION__, mId);
+            return INVALID_OPERATION;
         }
-        return res;
-    }
 
-    ALOGV("%s: Camera %d: Still capture available", __FUNCTION__,
-            mId);
+        res = mCaptureConsumer->lockNextBuffer(&imgBuffer);
+        if (res != OK) {
+            if (res != BAD_VALUE) {
+                ALOGE("%s: Camera %d: Error receiving still image buffer: "
+                        "%s (%d)", __FUNCTION__,
+                        mId, strerror(-res), res);
+            }
+            return res;
+        }
 
 #if 0
->>>>>>> ENGR00214328 make jpegProcess support more format than HAL_PIXEL_FORMAT_BLOB.
     if (imgBuffer.format != HAL_PIXEL_FORMAT_BLOB) {
         ALOGE("%s: Camera %d: Unexpected format for still image: "
                 "%x, expected %x", __FUNCTION__, mId,
@@ -252,13 +256,25 @@ status_t JpegProcessor::processNewCapture() {
                 __FUNCTION__, jpegSize, heapSize);
         jpegSize = heapSize;
     }
+        ALOGV("%s: Camera %d: Still capture available", __FUNCTION__,
+                mId);
 
-    // TODO: Optimize this to avoid memcopy
-    sp<MemoryBase> captureBuffer = new MemoryBase(mCaptureHeap, 0, jpegSize);
-    void* captureMemory = mCaptureHeap->getBase();
-    memcpy(captureMemory, imgBuffer.data, jpegSize);
+        if (imgBuffer.format != HAL_PIXEL_FORMAT_BLOB) {
+            ALOGE("%s: Camera %d: Unexpected format for still image: "
+                    "%x, expected %x", __FUNCTION__, mId,
+                    imgBuffer.format,
+                    HAL_PIXEL_FORMAT_BLOB);
+            mCaptureConsumer->unlockBuffer(imgBuffer);
+            return OK;
+        }
 
-    mCaptureConsumer->unlockBuffer(imgBuffer);
+        // TODO: Optimize this to avoid memcopy
+        captureBuffer = new MemoryBase(mCaptureHeap, 0, jpegSize);
+        void* captureMemory = mCaptureHeap->getBase();
+        memcpy(captureMemory, imgBuffer.data, jpegSize);
+
+        mCaptureConsumer->unlockBuffer(imgBuffer);
+    }
 
     sp<CaptureSequencer> sequencer = mSequencer.promote();
     if (sequencer != 0) {
